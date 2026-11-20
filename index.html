@@ -71,11 +71,10 @@
     if(s&&Array.isArray(s.players)&&s.players.length){
       players=s.players.filter(function(x){return typeof x==='string'});
       counts=s.counts&&typeof s.counts==='object'?s.counts:{};
-      if(s.last&&Array.isArray(s.last.squad))last=s.last;
     }
   }catch(e){}
   players.forEach(function(p){if(typeof counts[p]!=='number')counts[p]=0});
-  function save(){try{localStorage.setItem(KEY,JSON.stringify({players:players,counts:counts,last:last}))}catch(e){}}
+  function save(){try{localStorage.setItem(KEY,JSON.stringify({players:players,counts:counts}))}catch(e){}}
 
   function randInt(n){
     var max=Math.floor(0xFFFFFFFF/n)*n, b=new Uint32Array(1);
