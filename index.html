@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BGMI Squad Picker</title>
+<style>
+  :root{--bg:#0e1117;--card:#171b24;--line:#2a3040;--text:#eef1f6;--muted:#8b93a3;--accent:#f5a524;--ink:#1a1204;--wa:#25d366;--danger:#ff6b6b}
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:var(--bg);color:var(--text);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;min-height:100vh;padding:28px 16px 56px}
+  main{max-width:440px;margin:0 auto}
+  h1{font-size:20px;margin:0 0 20px;text-align:center;letter-spacing:.3px}
+  button,input,a{font:inherit}
+  .big{display:block;width:100%;min-height:60px;border:0;border-radius:14px;background:var(--accent);color:var(--ink);font-size:18px;font-weight:800;font-style:italic;letter-spacing:.2px;cursor:pointer}
+  .big:disabled{opacity:.6;cursor:default}
+  .big:focus-visible,.wa:focus-visible,.ghost:focus-visible,input:focus-visible,button:focus-visible{outline:3px solid #ffd27a;outline-offset:2px}
+  #result{margin-top:20px;display:none}
+  #card{display:block;width:100%;height:auto;border-radius:16px;box-shadow:0 10px 36px rgba(0,0,0,.55);background:#fff}
+  .wa{display:flex;align-items:center;justify-content:center;min-height:58px;margin-top:16px;border-radius:14px;background:var(--wa);color:#04210f;font-weight:800;font-size:18px;text-decoration:none}
+  .ghost{display:block;width:100%;min-height:48px;margin-top:8px;border:0;background:transparent;color:var(--muted);font-weight:600;cursor:pointer;border-radius:12px}
+  .status{color:var(--accent);font-size:14px;text-align:center;min-height:20px;margin:6px 0 0}
+  .players{margin-top:40px}
+  .players h2{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 10px;font-weight:600}
+  form{display:flex;gap:8px}
+  input{flex:1;min-width:0;min-height:48px;padding:0 14px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--text)}
+  .add{min-height:48px;padding:0 18px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--text);font-weight:700;cursor:pointer}
+  ul{list-style:none;margin:12px 0 0;padding:0}
+  li{display:flex;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:12px;margin-bottom:8px;min-height:48px}
+  li .nm{flex:1;min-width:0;text-align:left;border:0;background:transparent;color:var(--text);padding:0 14px;min-height:46px;cursor:text;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  li input{margin:3px;min-height:40px}
+  li .x{flex:none;width:46px;height:46px;border:0;background:transparent;color:var(--muted);font-size:22px;cursor:pointer}
+  li .x:hover{color:var(--danger)}
+  .msg{color:var(--muted);font-size:14px;text-align:center;margin:12px 0 0}
+</style>
+</head>
+<body>
+<main>
+  <h1>🎯 BGMI Squad Picker</h1>
+  <button class="big" id="pick" type="button">Pick today's squad</button>
+  <p class="msg" id="msg" role="status"></p>
+
+  <section id="result" aria-live="polite">
+    <img id="card" alt="">
+    <div id="actions">
+      <a class="wa" id="wa" href="#" target="_blank" rel="noopener noreferrer">Share on WhatsApp</a>
+      <button class="ghost" id="save" type="button" hidden>Save image</button>
+    </div>
+    <p class="status" id="status" role="status"></p>
+  </section>
+
+  <section class="players" aria-label="Players">
+    <h2>Players · <span id="count"></span></h2>
+    <form id="form">
+      <input id="in" type="text" placeholder="Add a player" autocomplete="off" aria-label="Player name">
+      <button class="add" type="submit">Add</button>
+    </form>
+    <ul id="list"></ul>
+  </section>
+</main>
+
+<script>
+(function(){
+  var KEY='bgmi-picker-v5', SIZE=4;
+  var $=function(id){return document.getElementById(id)};
+  var players=['Bullseye','Beerush','Thedarkveccna','Lava','Sibaan','Anubhav','Hokage'];
+  var counts={}, last=null, busy=false, editing=null, lastBlob=null, dl=null;
+
+  try{
+    var s=JSON.parse(localStorage.getItem(KEY)||'null');
+    if(s&&Array.isArray(s.players)&&s.players.length){
+      players=s.players.filter(function(x){return typeof x==='string'});
+      counts=s.counts&&typeof s.counts==='object'?s.counts:{};
+      if(s.last&&Array.isArray(s.last.squad))last=s.last;
+    }
+  }catch(e){}
+  players.forEach(function(p){if(typeof counts[p]!=='number')counts[p]=0});
+  function save(){try{localStorage.setItem(KEY,JSON.stringify({players:players,counts:counts,last:last}))}catch(e){}}
+
+  function randInt(n){
+    var max=Math.floor(0xFFFFFFFF/n)*n, b=new Uint32Array(1);
+    do{crypto.getRandomValues(b)}while(b[0]>=max);
+    return b[0]%n;
+  }
+  function shuffle(a){a=a.slice();for(var i=a.length-1;i>0;i--){var j=randInt(i+1),t=a[i];a[i]=a[j];a[j]=t}return a}
+  function reduced(){return window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches}
+
+  // Fair pick: everyone's turns are counted and the people with the fewest turns go first.
+  // Ties are broken by a secure random shuffle, so it is unpredictable but nobody gets ahead.
+  function choose(){
+    var order=shuffle(players);
+    order.sort(function(a,b){return counts[a]-counts[b]});
+    var squad=order.slice(0,Math.min(SIZE,players.length));
+    squad.forEach(function(p){counts[p]++});
+    return squad;
+  }
+
+  function benchOf(sq){return players.filter(function(p){return sq.indexOf(p)<0})}
+  function dateText(){return new Date().toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short'})}
+  function message(sq,date){
+    var nums=['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣'], bench=benchOf(sq);
+    var m='🎮 *BGMI Squad* · '+date+'\n\n'+sq.map(function(p,i){return (nums[i]||(i+1)+'.')+' '+p}).join('\n');
+    if(bench.length)m+='\n\n🪑 Bench: '+bench.join(', ');
+    return m+'\n\n🎲 Random pick, equal chances for everyone';
+  }
+
+  // ---------- the shareable picture ----------
+  function rr(g,x,y,w,h,r){g.beginPath();g.moveTo(x+r,y);g.arcTo(x+w,y,x+w,y+h,r);g.arcTo(x+w,y+h,x,y+h,r);g.arcTo(x,y+h,x,y,r);g.arcTo(x,y,x+w,y,r);g.closePath()}
+  function spaced(g,t,x,y,sp){for(var i=0;i<t.length;i++){g.fillText(t[i],x,y);x+=g.measureText(t[i]).width+sp}}
+  var FONT='-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif';
+  function fit(g,t,weight,size,min,maxW){
+    for(var s=size;s>=min;s-=2){g.font=weight+' '+s+'px '+FONT;if(g.measureText(t).width<=maxW)return t}
+    g.font=weight+' '+min+'px '+FONT;
+    while(t.length>1&&g.measureText(t+'…').width>maxW)t=t.slice(0,-1);
+    return t+'…';
+  }
+  var INK='#0f1420', AMB='#f5a524', ORG='#ef7d00', MUTE='#8a93a6', SOFT='#f3f5f9';
+  function slant(g,x,y,w,h,k){g.beginPath();g.moveTo(x+k,y);g.lineTo(x+w,y);g.lineTo(x+w-k,y+h);g.lineTo(x,y+h);g.closePath()}
+  function crosshair(g,cx,cy,r,col,lw){
+    g.save();g.strokeStyle=col;g.fillStyle=col;g.lineWidth=lw||3;g.lineCap='round';
+    g.beginPath();g.arc(cx,cy,r,0,Math.PI*2);g.stroke();
+    g.beginPath();g.arc(cx,cy,lw?lw*0.8:2.5,0,Math.PI*2);g.fill();
+    [[0,-1],[1,0],[0,1],[-1,0]].forEach(function(d){
+      g.beginPath();g.moveTo(cx+d[0]*(r*0.55),cy+d[1]*(r*0.55));g.lineTo(cx+d[0]*(r*1.45),cy+d[1]*(r*1.45));g.stroke();
+    });
+    g.restore();
+  }
+  // original supply-drop sticker: a parachute with a small crate
+  function airdrop(g,cx,cy,s){
+    g.save();
+    var top=cy-s, bot=cy+s*0.15, left=cx-s, right=cx+s;
+    var cg=g.createLinearGradient(left,top,right,bot); cg.addColorStop(0,AMB); cg.addColorStop(1,ORG);
+    g.beginPath(); g.moveTo(left,bot);
+    g.bezierCurveTo(left,top-s*0.35,right,top-s*0.35,right,bot);
+    var n=4, w=(right-left)/n;
+    for(var i=n;i>0;i--){var x1=left+w*i, x0=left+w*(i-1); g.quadraticCurveTo((x1+x0)/2,bot-s*0.28,x0,bot)}
+    g.closePath(); g.fillStyle=cg; g.fill();
+    g.strokeStyle='rgba(255,255,255,.55)'; g.lineWidth=2.5;
+    for(var j=1;j<n;j++){g.beginPath();g.moveTo(left+w*j,bot-s*0.1);g.quadraticCurveTo(cx+(j-2)*s*0.22,top+s*0.1,cx,top+s*0.02);g.stroke()}
+    var bx=cx-s*0.26, by=cy+s*0.95, bs=s*0.52;
+    g.strokeStyle='rgba(255,255,255,.8)'; g.lineWidth=2;
+    g.beginPath(); g.moveTo(left+w*0.5,bot); g.lineTo(bx,by); g.moveTo(right-w*0.5,bot); g.lineTo(bx+bs,by); g.moveTo(cx,bot); g.lineTo(cx,by); g.stroke();
+    g.fillStyle='#fff'; g.beginPath(); g.rect(bx,by,bs,bs*0.8); g.fill();
+    g.fillStyle=ORG; g.fillRect(bx+bs*0.44,by,bs*0.12,bs*0.8); g.fillRect(bx,by+bs*0.34,bs,bs*0.12);
+    g.restore();
+  }
+  function benchLines(bench){
+    var m=document.createElement('canvas').getContext('2d'); m.font='italic 600 27px '+FONT;
+    var lines=[], cur='';
+    bench.forEach(function(w){
+      var t=cur?cur+'  ·  '+w:w;
+      if(m.measureText(t).width>940&&cur){lines.push(cur);cur=w}else cur=t;
+    });
+    if(cur)lines.push(cur);
+    if(lines.length>3){lines=lines.slice(0,3);lines[2]+=' …'}
+    return lines;
+  }
+  function poster(squad,bench,date){
+    var W=1080, rowH=98, gap=14, top=268, n=squad.length;
+    var bl=bench.length?benchLines(bench):[];
+    var benchH=bl.length?(64+bl.length*40):0;
+    var H=top+n*(rowH+gap)+28+benchH+120;
+    var c=document.createElement('canvas'); c.width=W; c.height=H;
+    var g=c.getContext('2d');
+    g.fillStyle='#ffffff'; g.fillRect(0,0,W,H);
+
+    // header band
+    g.fillStyle=INK; g.beginPath(); g.moveTo(0,0); g.lineTo(W,0); g.lineTo(W,172); g.lineTo(0,222); g.closePath(); g.fill();
+    var sg=g.createLinearGradient(0,0,W,0); sg.addColorStop(0,AMB); sg.addColorStop(1,ORG);
+    g.fillStyle=sg; g.beginPath(); g.moveTo(0,222); g.lineTo(W,172); g.lineTo(W,188); g.lineTo(0,238); g.closePath(); g.fill();
+    g.textBaseline='alphabetic'; g.textAlign='left';
+    g.fillStyle='#ffffff'; g.font='italic 900 60px '+FONT; g.fillText('SQUAD UP',64,112);
+    g.fillStyle=AMB; g.font='italic 700 22px '+FONT; spaced(g,('BGMI  ·  '+date).toUpperCase(),66,158,4);
+    airdrop(g,W-130,74,40);
+
+    // rows
+    squad.forEach(function(name,i){
+      var x=64, w=W-128, y=top+i*(rowH+gap), cy=y+rowH/2;
+      slant(g,x,y,w,rowH,22); g.fillStyle=SOFT; g.fill();
+      var bg=g.createLinearGradient(x,y,x+90,y+rowH); bg.addColorStop(0,AMB); bg.addColorStop(1,ORG);
+      slant(g,x,y,92,rowH,22); g.fillStyle=bg; g.fill();
+      g.fillStyle=INK; g.textAlign='center'; g.textBaseline='middle'; g.font='italic 900 42px '+FONT; g.fillText(String(i+1),x+48,cy+2);
+      g.textAlign='left'; g.fillStyle=INK; var t=fit(g,name,'italic 800',44,26,700); g.fillText(t,x+132,cy+2);
+      crosshair(g,x+w-58,cy,15,'#d5dae5',2.5);
+    });
+
+    // bench
+    g.textBaseline='alphabetic'; g.textAlign='left';
+    var by=top+n*(rowH+gap)+28;
+    if(bl.length){
+      g.fillStyle=MUTE; g.font='italic 800 20px '+FONT; spaced(g,'BENCH',66,by+30,5);
+      g.fillStyle='#4a5368'; g.font='italic 600 27px '+FONT;
+      bl.forEach(function(l,i){g.fillText(l,66,by+74+i*40)});
+    }
+
+    // footer
+    var fy=H-84;
+    g.strokeStyle='#e3e7ef'; g.lineWidth=2; g.beginPath(); g.moveTo(64,fy); g.lineTo(W-64,fy); g.stroke();
+    crosshair(g,86,fy+40,11,AMB,2.5);
+    g.fillStyle=MUTE; g.font='italic 600 20px '+FONT; g.fillText('Random pick  ·  everyone gets equal turns',112,fy+47);
+    [0,1,2].forEach(function(k){
+      g.fillStyle=k===2?ORG:(k===1?AMB:'#ffd98a'); slant(g,W-64-96+k*34,fy+26,22,28,8); g.fill();
+    });
+    return c;
+  }
+  function show(squad,date,fast){
+    var c=poster(squad,benchOf(squad),date);
+    $('card').src=c.toDataURL(fast?'image/jpeg':'image/png',0.55);
+    $('card').alt='BGMI squad for '+date+': '+squad.join(', ');
+    return c;
+  }
+
+  // ---------- sharing ----------
+  function setStatus(t){$('status').textContent=t}
+  function copyImage(){
+    if(!lastBlob){return}
+    try{
+      if(!navigator.clipboard||typeof ClipboardItem==='undefined')throw new Error('no clipboard');
+      navigator.clipboard.write([new ClipboardItem({'image/png':lastBlob})]).then(
+        function(){setStatus('Image copied. Paste it into WhatsApp.')},
+        function(){setStatus('Could not copy the image. Press and hold it to share, or tap Save image.')}
+      );
+    }catch(e){setStatus('Press and hold the image to share it, or tap Save image.')}
+  }
+  $('wa').onclick=function(){copyImage()};
+  $('save').onclick=function(){
+    if(!dl||!lastBlob)return;
+    var d=new Date(), stamp=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    dl.save({filename:'bgmi-squad-'+stamp+'.png',data:lastBlob}).then(
+      function(){setStatus('Saved. Attach it in WhatsApp.')},
+      function(e){if(!e||e.code!=='declined')setStatus('Could not save the image here. Press and hold it to share.')}
+    );
+  };
+  try{
+    if(window.claude&&claude.use){claude.use('downloads').then(function(d){if(d){dl=d;$('save').hidden=false}},function(){})}
+  }catch(e){}
+
+  // ---------- page ----------
+  function render(){
+    $('count').textContent=players.length;
+    $('pick').disabled=busy||players.length<2;
+    $('msg').textContent=players.length<2?'Add at least 2 players to pick a squad.':'';
+    if(last&&!busy&&last.squad.length){
+      $('result').style.display='block'; $('actions').style.display='block';
+      var c=show(last.squad,last.date,false);
+      c.toBlob(function(b){lastBlob=b});
+      $('wa').href='https://wa.me/?text='+encodeURIComponent(message(last.squad,last.date));
+    }else if(!busy){$('result').style.display='none'}
+    var ul=$('list'); ul.textContent='';
+    players.forEach(function(p){
+      var li=document.createElement('li');
+      if(editing===p){
+        var inp=document.createElement('input'); inp.type='text'; inp.value=p; inp.maxLength=24; inp.setAttribute('aria-label','Rename '+p);
+        var done=false;
+        var commit=function(){if(done)return;done=true;rename(p,inp.value)};
+        inp.onkeydown=function(e){if(e.key==='Enter'){e.preventDefault();commit()}else if(e.key==='Escape'){done=true;editing=null;render()}};
+        inp.onblur=commit; li.appendChild(inp);
+        setTimeout(function(){inp.focus();inp.select()},0);
+      }else{
+        var b=document.createElement('button'); b.type='button'; b.className='nm'; b.textContent=p;
+        b.setAttribute('aria-label','Rename '+p); b.disabled=busy; b.onclick=function(){editing=p;render()};
+        li.appendChild(b);
+      }
+      var x=document.createElement('button'); x.type='button'; x.className='x'; x.textContent='×';
+      x.setAttribute('aria-label','Remove '+p); x.disabled=busy; x.onmousedown=function(e){e.preventDefault()};
+      x.onclick=function(){remove(p)};
+      li.appendChild(x); ul.appendChild(li);
+    });
+  }
+
+  function minCount(){var v=players.map(function(p){return counts[p]});return v.length?Math.min.apply(null,v):0}
+  function add(name){
+    var nm=name.trim().replace(/\s+/g,' ').slice(0,24);
+    if(!nm||players.some(function(p){return p.toLowerCase()===nm.toLowerCase()}))return false;
+    counts[nm]=minCount();            // a new player starts level with the others, not ahead and not behind
+    players.push(nm); return true;
+  }
+  function remove(p){
+    players=players.filter(function(q){return q!==p}); delete counts[p];
+    if(last)last.squad=last.squad.filter(function(q){return q!==p});
+    if(last&&!last.squad.length)last=null;
+    editing=null; setStatus(''); save(); render();
+  }
+  function rename(oldName,val){
+    var nm=val.trim().replace(/\s+/g,' ').slice(0,24);
+    editing=null;
+    if(nm&&nm!==oldName&&!players.some(function(p){return p!==oldName&&p.toLowerCase()===nm.toLowerCase()})){
+      players=players.map(function(p){return p===oldName?nm:p});
+      counts[nm]=counts[oldName]; delete counts[oldName];
+      if(last)last.squad=last.squad.map(function(p){return p===oldName?nm:p});
+      setStatus(''); save();
+    }
+    render();
+  }
+
+  $('form').onsubmit=function(e){
+    e.preventDefault();
+    $('in').value.split(/[,\n]/).forEach(add);
+    $('in').value=''; save(); render(); $('in').focus();
+  };
+
+  $('pick').onclick=function(){
+    if(busy||players.length<2)return;
+    var squad=choose(), date=dateText();
+    setStatus('');
+    if(reduced()){last={squad:squad,date:date};save();render();return;}
+    busy=true; $('result').style.display='block'; $('actions').style.display='none';
+    var ticks=0;
+    var iv=setInterval(function(){
+      ticks++;
+      show(shuffle(players).slice(0,Math.min(SIZE,players.length)),date,true);
+      if(ticks>=12){
+        clearInterval(iv); busy=false; last={squad:squad,date:date}; save(); render();
+        $('result').scrollIntoView({behavior:'smooth',block:'nearest'});
+      }
+    },90);
+    render();
+  };
+
+  render();
+})();
+</script>
+</body>
+</html>
